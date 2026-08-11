@@ -257,7 +257,7 @@ async function buildAggregate(env, { isPublic = false } = {}) {
     cpu: isPublic && d.cpu != null ? Math.round(d.cpu * 1000) / 10 : (d.cpu ?? null),
     memory: isPublic && d.memory != null ? Math.round(d.memory * 1000) / 10 : (d.memory ?? null),
     uptime: d.uptime ?? null,
-    message: isPublic && d.message != null ? String(d.message).replace(/-[A-Z0-9]+$/i, '-XXXXXXX') : (d.message ?? null),
+    message: isPublic && d.message != null ? String(d.message).replace(/-[A-Z0-9]+/i, '-XXXXXXX') : (d.message ?? null),
     lastReportAt: d.last_report_at ?? null,
   }));
   const monitors = (await env.DB.prepare(MONITOR_LIST_SQL).all()).results.map((m) => ({
