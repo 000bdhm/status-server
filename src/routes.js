@@ -55,6 +55,16 @@ const MONITOR_LIST_SQL = `
                                          WHERE monitor_id = m.id ORDER BY id DESC LIMIT 1)
   ORDER BY m.created_at ASC`;
 
+const MONITOR_BY_ID_SQL = `
+  SELECT m.id, m.name, m.type, m.url, m.host, m.port, m.method, m.expected_code,
+         m.interval_sec, m.timeout_ms, m.enabled, m.created_at, m.last_checked_at,
+         r.status AS last_status, r.status_code AS last_status_code,
+         r.response_ms AS last_response_ms, r.error AS last_error, r.checked_at AS last_result_at
+  FROM monitors m
+  LEFT JOIN monitor_results r ON r.id = (SELECT id FROM monitor_results
+                                         WHERE monitor_id = m.id ORDER BY id DESC LIMIT 1)
+  WHERE m.id = ?`;
+
 function sanitizeMonitor(body, existing = {}) {
   const type = body.type ?? existing.type;
   if (typeof type !== 'string' || !TYPES.has(type)) {
@@ -89,6 +99,10 @@ function sanitizeMonitor(body, existing = {}) {
       throw new HttpError(400, 'method must be GET, HEAD or POST');
     }
   }
+  m.url = m.url ?? null;
+  m.host = m.host ?? null;
+  m.port = m.port ?? null;
+  m.expected_code = m.expected_code ?? null;
   return m;
 }
 
@@ -194,7 +208,7 @@ async function createMonitor(request, env) {
   const monitor = await getMonitorOr404(env, id);
   const result = await checkMonitor(monitor);
   await recordMonitorResult(env, monitor, result);
-  return json({ monitor: await getMonitorOr404(env, id) }, 201);
+  return json({ monitor: await env.DB.prepare(MONITOR_BY_ID_SQL).bind(id).first() }, 201);
 }
 
 async function listMonitors(request, env) {
@@ -213,7 +227,7 @@ async function updateMonitor(request, env, match) {
     m.name, m.type, m.url, m.host, m.port, m.method, m.expected_code,
     m.interval_sec, m.timeout_ms, m.enabled, existing.id,
   ).run();
-  return json({ monitor: await getMonitorOr404(env, existing.id) });
+  return json({ monitor: await env.DB.prepare(MONITOR_BY_ID_SQL).bind(existing.id).first() });
 }
 
 async function deleteMonitor(request, env, match) {
