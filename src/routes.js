@@ -248,14 +248,14 @@ async function manualCheck(request, env, match) {
   return json({ ...result, monitorId: monitor.id });
 }
 
-async function buildAggregate(env) {
+async function buildAggregate(env, { isPublic = false } = {}) {
   const devices = (await env.DB.prepare(DEVICE_LIST_SQL).all()).results.map((d) => ({
     id: d.id,
-    name: d.name,
+    name: isPublic ? String(d.name).replace(/-[A-Z0-9]+$/i, '-XXXXXXX') : d.name,
     description: d.description,
     status: d.has_status ? d.status : 'unknown',
-    cpu: d.cpu ?? null,
-    memory: d.memory ?? null,
+    cpu: isPublic && d.cpu != null ? Math.round(d.cpu * 1000) / 10 : (d.cpu ?? null),
+    memory: isPublic && d.memory != null ? Math.round(d.memory * 1000) / 10 : (d.memory ?? null),
     uptime: d.uptime ?? null,
     message: d.message ?? null,
     lastReportAt: d.last_report_at ?? null,
@@ -282,7 +282,7 @@ async function aggregateStatus(request, env) {
 }
 
 async function publicStatus(_request, env) {
-  return json(await buildAggregate(env));
+  return json(await buildAggregate(env, { isPublic: true }));
 }
 
 async function deviceHistory(request, env, match, url) {
