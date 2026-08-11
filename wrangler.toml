@@ -5,7 +5,7 @@ compatibility_date = "2026-08-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "status-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "615a23bd-1d02-4efa-a09c-e5fcffaab451"
 migrations_dir = "migrations"
 
 [triggers]
