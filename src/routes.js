@@ -248,8 +248,7 @@ async function manualCheck(request, env, match) {
   return json({ ...result, monitorId: monitor.id });
 }
 
-async function aggregateStatus(request, env) {
-  requireAdmin(request, env);
+async function buildAggregate(env) {
   const devices = (await env.DB.prepare(DEVICE_LIST_SQL).all()).results.map((d) => ({
     id: d.id,
     name: d.name,
@@ -274,7 +273,16 @@ async function aggregateStatus(request, env) {
     error: m.last_error ?? null,
     lastCheckedAt: m.last_checked_at ?? null,
   }));
-  return json({ devices, monitors });
+  return { devices, monitors };
+}
+
+async function aggregateStatus(request, env) {
+  requireAdmin(request, env);
+  return json(await buildAggregate(env));
+}
+
+async function publicStatus(_request, env) {
+  return json(await buildAggregate(env));
 }
 
 async function deviceHistory(request, env, match, url) {
@@ -319,6 +327,7 @@ const routes = [
   { method: 'PUT', pattern: /^\/api\/v1\/monitors\/([^/]+)$/, handler: updateMonitor },
   { method: 'DELETE', pattern: /^\/api\/v1\/monitors\/([^/]+)$/, handler: deleteMonitor },
   { method: 'POST', pattern: /^\/api\/v1\/monitors\/([^/]+)\/check$/, handler: manualCheck },
+  { method: 'GET', pattern: /^\/api\/device-status$/, handler: publicStatus },
   { method: 'GET', pattern: /^\/api\/v1\/status$/, handler: aggregateStatus },
   { method: 'GET', pattern: /^\/api\/v1\/status\/devices\/([^/]+)\/history$/, handler: deviceHistory },
   { method: 'GET', pattern: /^\/api\/v1\/status\/monitors\/([^/]+)\/history$/, handler: monitorHistory },
