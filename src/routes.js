@@ -211,8 +211,7 @@ async function createMonitor(request, env) {
   return json({ monitor: await env.DB.prepare(MONITOR_BY_ID_SQL).bind(id).first() }, 201);
 }
 
-async function listMonitors(request, env) {
-  requireAdmin(request, env);
+async function listMonitors(_request, env) {
   return json({ monitors: (await env.DB.prepare(MONITOR_LIST_SQL).all()).results });
 }
 
@@ -248,16 +247,24 @@ async function manualCheck(request, env, match) {
   return json({ ...result, monitorId: monitor.id });
 }
 
+function censorName(value) {
+  return String(value).replace(/-[A-Z0-9]+/i, '-XXXXXXX');
+}
+
+function toPercent(x) {
+  return x == null ? null : Math.round(x * 1000) / 10;
+}
+
 async function buildAggregate(env, { isPublic = false } = {}) {
   const devices = (await env.DB.prepare(DEVICE_LIST_SQL).all()).results.map((d) => ({
     id: d.id,
-    name: isPublic ? String(d.name).replace(/-[A-Z0-9]+$/i, '-XXXXXXX') : d.name,
+    name: isPublic ? censorName(d.name) : d.name,
     description: d.description,
     status: d.has_status ? d.status : 'unknown',
-    cpu: isPublic && d.cpu != null ? Math.round(d.cpu * 1000) / 10 : (d.cpu ?? null),
-    memory: isPublic && d.memory != null ? Math.round(d.memory * 1000) / 10 : (d.memory ?? null),
+    cpu: isPublic ? toPercent(d.cpu) : (d.cpu ?? null),
+    memory: isPublic ? toPercent(d.memory) : (d.memory ?? null),
     uptime: d.uptime ?? null,
-    message: isPublic && d.message != null ? String(d.message).replace(/-[A-Z0-9]+/i, '-XXXXXXX') : (d.message ?? null),
+    message: isPublic && d.message != null ? censorName(d.message) : (d.message ?? null),
     lastReportAt: d.last_report_at ?? null,
   }));
   const monitors = (await env.DB.prepare(MONITOR_LIST_SQL).all()).results.map((m) => ({
@@ -276,9 +283,8 @@ async function buildAggregate(env, { isPublic = false } = {}) {
   return { devices, monitors };
 }
 
-async function aggregateStatus(request, env) {
-  requireAdmin(request, env);
-  return json(await buildAggregate(env));
+async function aggregateStatus(_request, env) {
+  return json(await buildAggregate(env, { isPublic: true }));
 }
 
 async function publicStatus(_request, env) {
@@ -286,7 +292,6 @@ async function publicStatus(_request, env) {
 }
 
 async function deviceHistory(request, env, match, url) {
-  requireAdmin(request, env);
   await getDeviceOr404(env, match[1]);
   const { limit, offset } = parseHistoryQuery(url);
   const events = (
@@ -296,7 +301,14 @@ async function deviceHistory(request, env, match, url) {
     )
       .bind(match[1], limit, offset)
       .all()
-  ).results;
+  ).results.map((e) => ({
+    status: e.status,
+    cpu: toPercent(e.cpu),
+    memory: toPercent(e.memory),
+    uptime: e.uptime,
+    message: e.message != null ? censorName(e.message) : null,
+    timestamp: e.timestamp,
+  }));
   return json({ deviceId: match[1], events });
 }
 
