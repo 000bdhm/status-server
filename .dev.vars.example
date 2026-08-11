@@ -1,0 +1,4 @@
+# Copy to .dev.vars for local dev (wrangler dev reads this file).
+# The real ADMIN_KEY for production is set with:
+#   npx wrangler secret put ADMIN_KEY
+ADMIN_KEY=change-me-to-a-long-random-string

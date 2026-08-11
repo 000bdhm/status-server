@@ -1,20 +1,16 @@
 {
   "name": "status-server",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
-  "description": "Status API — receives push status from devices/servers and polls websites/endpoints",
-  "engines": {
-    "node": ">=18.0.0"
-  },
+  "description": "Status API for Cloudflare Workers — receives push status from devices/servers and polls websites/endpoints via cron",
   "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/config.js && node --check src/db.js && node --check src/auth.js && node --check src/monitor/checker.js && node --check src/routes/devices.js && node --check src/routes/monitors.js && node --check src/routes/push.js && node --check src/routes/status.js"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:up": "wrangler d1 migrations apply status-db",
+    "db:local": "wrangler d1 migrations apply status-db --local"
   },
-  "dependencies": {
-    "better-sqlite3": "^11.10.0",
-    "dotenv": "^16.4.7",
-    "fastify": "^5.2.0"
+  "devDependencies": {
+    "wrangler": "^4.0.0"
   }
 }
