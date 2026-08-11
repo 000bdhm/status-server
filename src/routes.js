@@ -301,7 +301,6 @@ async function deviceHistory(request, env, match, url) {
 }
 
 async function monitorHistory(request, env, match, url) {
-  requireAdmin(request, env);
   await getMonitorOr404(env, match[1]);
   const { limit, offset } = parseHistoryQuery(url);
   const events = (
