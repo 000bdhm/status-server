@@ -81,7 +81,7 @@ function sanitizeMonitor(body, existing = {}) {
     port: body.port !== undefined ? body.port : existing.port,
     method: body.method || existing.method || 'GET',
     expected_code: body.expected_code !== undefined ? body.expected_code : existing.expected_code,
-    interval_sec: Math.max(60, Number(body.interval_sec) || existing.interval_sec || 60),
+    interval_sec: Math.max(60, Number(body.interval_sec) || existing.interval_sec || 3600),
     timeout_ms: Math.max(500, Number(body.timeout_ms) || existing.timeout_ms || 10000),
     enabled: body.enabled === undefined ? (existing.enabled ?? 1) : body.enabled ? 1 : 0,
   };

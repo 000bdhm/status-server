@@ -9,4 +9,4 @@ database_id = "615a23bd-1d02-4efa-a09c-e5fcffaab451"
 migrations_dir = "migrations"
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["0 * * * *"]
