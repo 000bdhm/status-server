@@ -11,11 +11,24 @@ class HttpError extends Error {
   }
 }
 
+function corsHeaders() {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'access-control-allow-headers': 'x-admin-key, authorization, content-type',
+    'access-control-max-age': '86400',
+  };
+}
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...corsHeaders() },
   });
+}
+
+async function optionsHandler() {
+  return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
 async function readBody(request) {
@@ -327,6 +340,7 @@ async function monitorHistory(request, env, match, url) {
 }
 
 const routes = [
+  { method: 'OPTIONS', pattern: /^\/.*$/, handler: optionsHandler },
   { method: 'GET', pattern: /^\/health$/, handler: health },
   { method: 'POST', pattern: /^\/api\/v1\/status$/, handler: pushStatus },
   { method: 'POST', pattern: /^\/api\/v1\/devices$/, handler: createDevice },
