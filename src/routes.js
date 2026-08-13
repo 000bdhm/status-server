@@ -3,6 +3,8 @@ import { checkMonitor } from './monitor.js';
 
 const TYPES = new Set(['http', 'https', 'tcp']);
 const STATUSES = new Set(['ok', 'degraded', 'down']);
+const SEVERITIES = new Set(['info', 'minor', 'major', 'critical']);
+const INCIDENT_STATUSES = new Set(['investigating', 'identified', 'monitoring', 'resolved']);
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -129,6 +131,32 @@ async function getMonitorOr404(env, id) {
   const monitor = await env.DB.prepare('SELECT * FROM monitors WHERE id = ?').bind(id).first();
   if (!monitor) throw new HttpError(404, 'monitor not found');
   return monitor;
+}
+
+async function getIncidentOr404(env, id) {
+  const incident = await env.DB.prepare('SELECT * FROM incidents WHERE id = ?').bind(id).first();
+  if (!incident) throw new HttpError(404, 'incident not found');
+  return incident;
+}
+
+async function uptimeFor(env, table, idColumn, timeColumn, id, days) {
+  const from = Date.now() - days * 86400000;
+  const row = await env.DB.prepare(
+    `SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END), 0) AS ok
+     FROM ${table} WHERE ${idColumn} = ? AND ${timeColumn} >= ?`,
+  ).bind(id, from).first();
+  const total = Number(row.total);
+  const ok = Number(row.ok);
+  return {
+    total,
+    ok,
+    down: total - ok,
+    uptimePct: total > 0 ? Math.round((ok / total) * 1000) / 10 : null,
+  };
+}
+
+function clampDays(url) {
+  return Math.max(1, Math.min(90, Number(url.searchParams.get('days')) || 30));
 }
 
 async function recordMonitorResult(env, monitor, result) {
@@ -260,6 +288,84 @@ async function manualCheck(request, env, match) {
   return json({ ...result, monitorId: monitor.id });
 }
 
+async function listIncidents(_request, env, _match, url) {
+  const { limit, offset } = parseHistoryQuery(url);
+  const incidents = (
+    await env.DB.prepare('SELECT * FROM incidents ORDER BY started_at DESC LIMIT ? OFFSET ?')
+      .bind(limit, offset)
+      .all()
+  ).results;
+  return json({ incidents });
+}
+
+async function createIncident(request, env) {
+  requireAdmin(request, env);
+  const body = (await readBody(request)) || {};
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (!title) throw new HttpError(400, 'title is required');
+  const severity = body.severity || 'info';
+  if (!SEVERITIES.has(severity)) {
+    throw new HttpError(400, `severity must be one of: ${[...SEVERITIES].join(', ')}`);
+  }
+  const status = body.status || 'investigating';
+  if (!INCIDENT_STATUSES.has(status)) {
+    throw new HttpError(400, `status must be one of: ${[...INCIDENT_STATUSES].join(', ')}`);
+  }
+  const now = Date.now();
+  const id = crypto.randomUUID();
+  const monitorId = typeof body.monitor_id === 'string' ? body.monitor_id : null;
+  const startedAt = Number.isInteger(body.started_at) && body.started_at > 0 ? body.started_at : now;
+  const resolvedAt =
+    status === 'resolved'
+      ? (Number.isInteger(body.resolved_at) && body.resolved_at > 0 ? body.resolved_at : now)
+      : null;
+  await env.DB.prepare(
+    `INSERT INTO incidents (id, monitor_id, title, description, severity, status, started_at, resolved_at, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(
+    id, monitorId, title, typeof body.description === 'string' ? body.description.trim() || null : null,
+    severity, status, startedAt, resolvedAt, now, now,
+  ).run();
+  return json({ incident: await getIncidentOr404(env, id) }, 201);
+}
+
+async function updateIncident(request, env, match) {
+  requireAdmin(request, env);
+  const existing = await getIncidentOr404(env, match[1]);
+  const body = (await readBody(request)) || {};
+  const title = body.title !== undefined ? String(body.title).trim() : existing.title;
+  if (!title) throw new HttpError(400, 'title is required');
+  const severity = body.severity !== undefined ? body.severity : existing.severity;
+  if (!SEVERITIES.has(severity)) {
+    throw new HttpError(400, `severity must be one of: ${[...SEVERITIES].join(', ')}`);
+  }
+  const status = body.status !== undefined ? body.status : existing.status;
+  if (!INCIDENT_STATUSES.has(status)) {
+    throw new HttpError(400, `status must be one of: ${[...INCIDENT_STATUSES].join(', ')}`);
+  }
+  const startedAt = body.started_at !== undefined ? body.started_at : existing.started_at;
+  let resolvedAt = body.resolved_at !== undefined ? body.resolved_at : existing.resolved_at;
+  if (status === 'resolved' && resolvedAt == null) resolvedAt = Date.now();
+  if (status !== 'resolved' && resolvedAt != null) resolvedAt = null;
+  const monitorId = body.monitor_id !== undefined ? body.monitor_id : existing.monitor_id;
+  const description =
+    body.description !== undefined
+      ? String(body.description).trim() || null
+      : existing.description;
+  await env.DB.prepare(
+    `UPDATE incidents SET title=?, description=?, severity=?, status=?, started_at=?,
+     resolved_at=?, monitor_id=?, updated_at=? WHERE id=?`,
+  ).bind(title, description, severity, status, startedAt, resolvedAt, monitorId, Date.now(), existing.id).run();
+  return json({ incident: await getIncidentOr404(env, existing.id) });
+}
+
+async function deleteIncident(request, env, match) {
+  requireAdmin(request, env);
+  await getIncidentOr404(env, match[1]);
+  await env.DB.prepare('DELETE FROM incidents WHERE id = ?').bind(match[1]).run();
+  return json({ ok: true });
+}
+
 function censorName(value) {
   return String(value).replace(/-[A-Z0-9]+/i, '-XXXXXXX');
 }
@@ -269,30 +375,44 @@ function toPercent(x) {
 }
 
 async function buildAggregate(env, { isPublic = false } = {}) {
-  const devices = (await env.DB.prepare(DEVICE_LIST_SQL).all()).results.map((d) => ({
-    id: d.id,
-    name: isPublic ? censorName(d.name) : d.name,
-    description: d.description,
-    status: d.has_status ? d.status : 'unknown',
-    cpu: isPublic ? toPercent(d.cpu) : (d.cpu ?? null),
-    memory: isPublic ? toPercent(d.memory) : (d.memory ?? null),
-    uptime: d.uptime ?? null,
-    message: isPublic && d.message != null ? censorName(d.message) : (d.message ?? null),
-    lastReportAt: d.last_report_at ?? null,
-  }));
-  const monitors = (await env.DB.prepare(MONITOR_LIST_SQL).all()).results.map((m) => ({
-    id: m.id,
-    name: m.name,
-    type: m.type,
-    target: m.type === 'tcp' ? `${m.host}:${m.port}` : m.url,
-    enabled: !!m.enabled,
-    intervalSec: m.interval_sec,
-    status: m.last_checked_at ? m.last_status : 'never_checked',
-    statusCode: m.last_status_code ?? null,
-    responseMs: m.last_response_ms ?? null,
-    error: m.last_error ?? null,
-    lastCheckedAt: m.last_checked_at ?? null,
-  }));
+  const deviceRows = (await env.DB.prepare(DEVICE_LIST_SQL).all()).results;
+  const devices = await Promise.all(
+    deviceRows.map(async (d) => {
+      const up = await uptimeFor(env, 'device_status', 'device_id', 'created_at', d.id, 30);
+      return {
+        id: d.id,
+        name: isPublic ? censorName(d.name) : d.name,
+        description: d.description,
+        status: d.has_status ? d.status : 'unknown',
+        cpu: isPublic ? toPercent(d.cpu) : (d.cpu ?? null),
+        memory: isPublic ? toPercent(d.memory) : (d.memory ?? null),
+        uptime: d.uptime ?? null,
+        message: isPublic && d.message != null ? censorName(d.message) : (d.message ?? null),
+        lastReportAt: d.last_report_at ?? null,
+        uptime30d: up.uptimePct,
+      };
+    }),
+  );
+  const monitorRows = (await env.DB.prepare(MONITOR_LIST_SQL).all()).results;
+  const monitors = await Promise.all(
+    monitorRows.map(async (m) => {
+      const up = await uptimeFor(env, 'monitor_results', 'monitor_id', 'checked_at', m.id, 30);
+      return {
+        id: m.id,
+        name: m.name,
+        type: m.type,
+        target: m.type === 'tcp' ? `${m.host}:${m.port}` : m.url,
+        enabled: !!m.enabled,
+        intervalSec: m.interval_sec,
+        status: m.last_checked_at ? m.last_status : 'never_checked',
+        statusCode: m.last_status_code ?? null,
+        responseMs: m.last_response_ms ?? null,
+        error: m.last_error ?? null,
+        lastCheckedAt: m.last_checked_at ?? null,
+        uptime30d: up.uptimePct,
+      };
+    }),
+  );
   return { devices, monitors };
 }
 
@@ -323,6 +443,20 @@ async function deviceHistory(request, env, match, url) {
     timestamp: e.timestamp,
   }));
   return json({ deviceId: match[1], events });
+}
+
+async function monitorUptime(request, env, match, url) {
+  await getMonitorOr404(env, match[1]);
+  const days = clampDays(url);
+  const stats = await uptimeFor(env, 'monitor_results', 'monitor_id', 'checked_at', match[1], days);
+  return json({ monitorId: match[1], days, ...stats });
+}
+
+async function deviceUptime(request, env, match, url) {
+  await getDeviceOr404(env, match[1]);
+  const days = clampDays(url);
+  const stats = await uptimeFor(env, 'device_status', 'device_id', 'created_at', match[1], days);
+  return json({ deviceId: match[1], days, ...stats });
 }
 
 async function monitorHistory(request, env, match, url) {
@@ -356,6 +490,12 @@ const routes = [
   { method: 'GET', pattern: /^\/api\/v1\/status$/, handler: aggregateStatus },
   { method: 'GET', pattern: /^\/api\/v1\/status\/devices\/([^/]+)\/history$/, handler: deviceHistory },
   { method: 'GET', pattern: /^\/api\/v1\/status\/monitors\/([^/]+)\/history$/, handler: monitorHistory },
+  { method: 'GET', pattern: /^\/api\/v1\/status\/monitors\/([^/]+)\/uptime$/, handler: monitorUptime },
+  { method: 'GET', pattern: /^\/api\/v1\/status\/devices\/([^/]+)\/uptime$/, handler: deviceUptime },
+  { method: 'GET', pattern: /^\/api\/v1\/incidents$/, handler: listIncidents },
+  { method: 'POST', pattern: /^\/api\/v1\/incidents$/, handler: createIncident },
+  { method: 'PUT', pattern: /^\/api\/v1\/incidents\/([^/]+)$/, handler: updateIncident },
+  { method: 'DELETE', pattern: /^\/api\/v1\/incidents\/([^/]+)$/, handler: deleteIncident },
 ];
 
 export default async function handleRequest(request, env) {
